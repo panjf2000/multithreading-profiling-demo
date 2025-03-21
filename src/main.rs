@@ -12,10 +12,22 @@ struct Cli {
     /// Total execution time in seconds
     #[arg(short, long, default_value_t = 10)]
     duration: u64,
+
+    /// Number of worker threads
+    #[arg(short = 't', long, default_value_t = 10)]
+    threads: usize,
+
+    /// Sleep duration in milliseconds for even numbers
+    #[arg(short = 's', long = "sleep-ms", default_value_t = 50)]
+    sleep_ms: u64,
+
+    /// Starting index for Fibonacci calculations
+    #[arg(short = 'i', long = "start-index", default_value_t = 10000)]
+    start_index: usize,
 }
 
-/// Fibonacci number calculator using dynamic programming
-fn fibonacci(n: usize) -> BigUint {
+/// Fibonacci number calculator with even-number sleep
+fn fibonacci(n: usize, sleep_ms: Duration) -> BigUint {
     // Handle base cases
     if n == 0 {
         return Zero::zero();
@@ -23,16 +35,16 @@ fn fibonacci(n: usize) -> BigUint {
         return One::one();
     }
 
-    // Sleep to simulating a slow operation.
-    if n == 10005 {
-        thread::sleep(Duration::from_millis(50));
+    // Sleep for even numbers
+    if n % 2 == 0 {
+        thread::sleep(sleep_ms);
     }
 
-    // Initialize DP table with explicit type annotation
+    // Initialize DP table
     let mut dp: Vec<BigUint> = vec![Zero::zero(); n + 1];
     dp[1] = One::one();
 
-    // Iterative calculation to avoid recursion
+    // Iterative calculation
     for i in 2..=n {
         dp[i] = &dp[i - 1] + &dp[i - 2];
     }
@@ -44,57 +56,67 @@ fn main() {
     // Parse command-line arguments
     let cli = Cli::parse();
     let total_duration = Duration::from_secs(cli.duration);
+    let sleep_ms = Duration::from_millis(cli.sleep_ms);
 
-    // Atomic flag for controlling thread execution
+    // Thread control flag
     let running = Arc::new(AtomicBool::new(true));
 
-    // Shared results storage with thread-safe access
-    let results = Arc::new(Mutex::new(vec![Zero::zero(); 10]));
-    let start_index = 10000;
+    // Shared results storage
+    let results = Arc::new(Mutex::new(vec![Zero::zero(); cli.threads]));
 
-    // Create and manage worker threads
+    // Create worker threads
     let mut handles = vec![];
-    for (idx, n) in (start_index..start_index + 10).enumerate() {
+    for (idx, n) in (cli.start_index..cli.start_index + cli.threads).enumerate() {
         let running = Arc::clone(&running);
         let results = Arc::clone(&results);
+        let sleep_ms = sleep_ms;
 
         handles.push(thread::spawn(move || {
-            // Continuous execution loop
+            // Continuous calculation loop
             while running.load(Ordering::Relaxed) {
-                let value = fibonacci(n);
+                let value = fibonacci(n, sleep_ms);
 
                 // Update shared results
                 let mut res = results.lock().unwrap();
                 res[idx] = value.clone();
 
-                // Prevent excessive CPU usage
+                // Prevent excessive CPU
                 thread::sleep(Duration::from_millis(1));
             }
         }));
     }
 
-    // Main thread timing control
+    // Main control loop
     let start_time = Instant::now();
     while start_time.elapsed() < total_duration {
-        // Periodic results printing
+        // Print periodic results
         let res = results.lock().unwrap();
-        println!("Current results: {:?}", *res);
-        drop(res); // Explicit lock release
+        println!(
+            "Fibonacci[{}-{}]: {:?}",
+            cli.start_index,
+            cli.start_index + cli.threads - 1,
+            *res
+        );
+        drop(res);
 
-        // Console update interval
         thread::sleep(Duration::from_secs(1));
     }
 
-    // Signal threads to stop
+    // Stop threads
     running.store(false, Ordering::Relaxed);
 
-    // Wait for thread termination
+    // Cleanup
     for handle in handles {
         handle.join().unwrap();
     }
 
     // Final output
     let final_res = results.lock().unwrap();
-    println!("Final results: {:?}", *final_res);
-    println!("Program completed in {:?} seconds", total_duration);
+    println!(
+        "Final results for {}-{}: {:?}",
+        cli.start_index,
+        cli.start_index + cli.threads - 1,
+        *final_res
+    );
+    println!("Program ran for {:?} seconds", cli.duration);
 }
